@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>고차방정식(응용)</title>
+  <!-- MathJax 로드 (LaTeX 수식 렌더링) -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+  <style>
+    body {
+      background-color: black; 
+      color: white; 
+      font-family: sans-serif; 
+      margin: 20px;
+    }
+    h1, h2, h3 {
+      text-align: center;
+    }
+    .centered {
+      text-align: center;
+    }
+    .question-box {
+      border: 1px solid white;
+      padding: 10px;
+      margin-bottom: 20px;
+    }
+    .choices-box {
+      margin: 10px 0;
+    }
+    .choice-btn {
+      display: block;
+      margin: 4px 0;
+      background: none;
+      color: white;
+      border: 1px solid white;
+      padding: 6px;
+      cursor: pointer;
+    }
+    .energy-bar {
+      width: 200px;
+      height: 20px;
+      border: 1px solid white;
+      margin: 10px auto;
+      position: relative;
+    }
+    .energy-fill {
+      background-color: white;
+      height: 100%;
+      width: 100%; /* 시작은 꽉 찬 상태에서 난이도별로 시간 조정 */
+      transition: width 0.2s linear;
+    }
+    #response {
+      white-space: pre;
+      background: #333; 
+      padding: 5px; 
+      margin-top: 10px;
+    }
+    .hidden {
+      display: none;
+    }
+    /* 흑백 스타일 보강 */
+    button {
+      background: #222; 
+      color: white; 
+      border: 1px solid white;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #444;
+    }
+  </style>
+</head>
+<body>
+<h1>고차방정식(응용)</h1>
+
+<!-- 첫 화면(이름 입력/난이도 선택) -->
+<div id="start-screen">
+  <h2>이름을 입력하세요</h2>
+  <div class="centered">
+    <input type="text" id="player-name" placeholder="이름" style="color:black;" />
+  </div>
+  <h2>난이도를 선택하세요</h2>
+  <div class="centered">
+    <label><input type="radio" name="difficulty" value="하" checked>하 (시간제한 없음, 문제당 10점)</label><br/>
+    <label><input type="radio" name="difficulty" value="중">중 (40초, 문제당 13점)</label><br/>
+    <label><input type="radio" name="difficulty" value="상">상 (30초, 문제당 15점)</label><br/>
+    <label><input type="radio" name="difficulty" value="최상">최상 (20초, 문제당 20점)</label>
+  </div>
+  <div class="centered" style="margin-top:10px;">
+    <button onclick="startGame()">게임 시작</button>
+  </div>
+</div>
+
+<!-- 퀴즈 화면 -->
+<div id="quiz-screen" class="hidden">
+  <h2>남은 기회: <span id="lives">3</span></h2>
+  <h2>누적 점수: <span id="score">0</span></h2>
+  <div>전체 경과 시간: <span id="elapsedTime">0</span>초</div>
+
+  <div class="energy-bar" id="energyBar">
+    <div class="energy-fill" id="energyFill"></div>
+  </div>
+
+  <div id="question-container" class="question-box">
+    <!-- 문제와 보기 동적 표시 -->
+    <div id="question-text"></div>
+    <div id="choices" class="choices-box"></div>
+  </div>
+</div>
+
+<!-- 게임오버 화면 -->
+<div id="gameover-screen" class="hidden">
+  <h2>게임 종료!</h2>
+  <p>최종 점수: <span id="final-score">0</span></p>
+  <button onclick="restartGame()">다시 시작</button>
+  <button onclick="submitScore()">점수전송</button>
+  <div id="response"></div>
+</div>
+
+<script>
+// --------------------------------------------------------------------
+// 점수 전송 함수
+function saveData(game, name, score, elapsedTime) {
+    const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+    const requestData = {
+        game,
+        name,
+        score: parseInt(score, 10),
+        elapsedTime: parseInt(elapsedTime, 10)
+    };
+
+    fetch(FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+    })
+    .then(async (response) => {
+        const responseData = await response.json();
+        if (response.ok) {
+            document.getElementById('response').innerText = 
+                "성공: " + JSON.stringify(responseData, null, 2);
+        } else {
+            document.getElementById('response').innerText = 
+                "오류: " + JSON.stringify(responseData, null, 2);
+        }
+    })
+    .catch((error) => {
+        console.error('요청 실패:', error);
+        document.getElementById('response').innerText = 
+            "네트워크 오류: " + error.message;
+    });
+}
+
+// "점수전송" 버튼에서 호출
+function submitScore() {
+  const name = playerName;
+  saveData("고차방정식(응용)", name, score, totalElapsedTime);
+}
+// --------------------------------------------------------------------
+
+// 전역 변수들
+let problems = [];           // 문제 목록(아래에서 구성)
+let currentProblemIndex = 0; // 현재 몇 번 문제를 풀고 있는지
+let lives = 3;               // 남은 기회
+let score = 0;               // 점수
+let startTime = 0;           // 전체 경과시간 측정용
+let totalElapsedTime = 0;
+let problemStartTime = 0;    // 문제 시작 시각
+let timeLimit = 999999;      // 난이도별 시간(기본=무제한)
+let pointPerQuestion = 10;   // 난이도별 점수
+let timerInterval = null;    // setInterval 핸들
+let playerName = "";
+
+// 난이도별로 시간/점수 설정
+function setDifficulty(diff) {
+  if(diff === "최상"){
+    timeLimit = 20;
+    pointPerQuestion = 20;
+  } else if(diff === "상"){
+    timeLimit = 30;
+    pointPerQuestion = 15;
+  } else if(diff === "중"){
+    timeLimit = 40;
+    pointPerQuestion = 13;
+  } else {
+    timeLimit = 999999; // 하: 사실상 무제한
+    pointPerQuestion = 10;
+  }
+}
+
+// 시작화면 → 퀴즈화면
+function startGame(){
+  const nameInput = document.getElementById("player-name");
+  playerName = nameInput.value.trim();
+  if(!playerName){
+    alert("이름을 입력하세요!");
+    return;
+  }
+
+  // 난이도 체크
+  const diffs = document.getElementsByName("difficulty");
+  let chosenDiff = "하";
+  for(let d of diffs){
+    if(d.checked){
+      chosenDiff = d.value;
+      break;
+    }
+  }
+  setDifficulty(chosenDiff);
+
+  // 화면 전환
+  document.getElementById("start-screen").classList.add("hidden");
+  document.getElementById("quiz-screen").classList.remove("hidden");
+
+  // 변수 초기화
+  lives = 3;
+  score = 0;
+  totalElapsedTime = 0;
+  currentProblemIndex = 0;
+
+  // 문제 리스트 섞기
+  shuffleArray(problems);
+
+  // 타이머 시작
+  startTime = Date.now();
+  if(timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(updateTimer, 200);
+
+  // 첫 문제 표시
+  loadNewProblem();
+}
+
+// 매 문제를 새로 표시
+function loadNewProblem(){
+  // 만약 문제를 전부 소진했다면, 다시 섞어서 "끝없이" 내준다.
+  if(currentProblemIndex >= problems.length){
+    currentProblemIndex = 0;
+    shuffleArray(problems);
+  }
+
+  // 새 문제 시작 시각
+  problemStartTime = Date.now();
+
+  // 문제/보기 표시
+  const q = problems[currentProblemIndex];
+  document.getElementById("question-text").innerHTML = q.question;
+  
+  // 보기 표시(보기 자체도 무작위로 섞음)
+  const cContainer = document.getElementById("choices");
+  cContainer.innerHTML = "";
+  
+  // 보기 인덱스 배열 [0,1,2,3] → 셔플
+  let idxArr = [0,1,2,3];
+  shuffleArray(idxArr);
+
+  idxArr.forEach((i)=>{
+    const btn = document.createElement("button");
+    btn.className = "choice-btn";
+    btn.innerHTML = q.choices[i];
+    btn.onclick = ()=>checkAnswer(i, q);
+    cContainer.appendChild(btn);
+  });
+
+  // 수식 렌더링
+  MathJax.typeset();
+}
+
+// 답안 체크
+function checkAnswer(chosenIndex, problemObj){
+  // 정답인지 확인
+  if(problemObj.correctIndex === chosenIndex){
+    // 정답
+    score += pointPerQuestion;
+    document.getElementById("score").innerText = score;
+  } else {
+    // 오답
+    alert("오답! 정답은:\n" + problemObj.explanation);
+    lives--;
+    document.getElementById("lives").innerText = lives;
+    if(lives <= 0){
+      endGame();
+      return;
+    }
+  }
+
+  // 다음 문제
+  currentProblemIndex++;
+  loadNewProblem();
+}
+
+// 일정 주기마다 호출하여 시간(에너지바) 갱신
+function updateTimer(){
+  // 전체 경과 시간
+  let now = Date.now();
+  let elapsed = Math.floor((now - startTime)/1000);
+  totalElapsedTime = elapsed;
+  document.getElementById("elapsedTime").innerText = elapsed;
+
+  // 현재 문제에서 경과한 시간
+  let problemElapsed = (now - problemStartTime)/1000;
+  if(problemElapsed > timeLimit){
+    // 시간 초과 → 기회 1 감소, 다음문제
+    if(timeLimit < 999999){ 
+      // 하(무제한) 난이도이면 시간초과 없음
+      lives--;
+      document.getElementById("lives").innerText = lives;
+      alert("시간 초과! 기회가 1 감소합니다.");
+      if(lives <= 0){
+        endGame();
+        return;
+      }
+    }
+    currentProblemIndex++;
+    loadNewProblem();
+  }
+
+  // 에너지바 폭 갱신(무제한이면 100%유지)
+  if(timeLimit >= 999999){
+    document.getElementById("energyFill").style.width = "100%";
+  } else {
+    // 남은 비율
+    let remainRatio = 1 - (problemElapsed / timeLimit);
+    if(remainRatio < 0) remainRatio=0;
+    document.getElementById("energyFill").style.width = (remainRatio*100)+"%";
+  }
+}
+
+// 게임 종료
+function endGame(){
+  clearInterval(timerInterval);
+  // 퀴즈화면 숨기고 게임오버 화면 표시
+  document.getElementById("quiz-screen").classList.add("hidden");
+  document.getElementById("gameover-screen").classList.remove("hidden");
+  document.getElementById("final-score").innerText = score;
+}
+
+// 다시 시작
+function restartGame(){
+  document.getElementById("gameover-screen").classList.add("hidden");
+  document.getElementById("start-screen").classList.remove("hidden");
+}
+
+// 배열 셔플
+function shuffleArray(arr){
+  for(let i=arr.length-1; i>0; i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+// --------------------------------------------------------------------
+// 문제 데이터( #55, #56 제외 총 36문 )
+// 각 객체:
+//   question: "HTML에 표현할 문제문자열(LaTeX는 \\(...\\)로)"
+//   choices: ["보기1","보기2","보기3","보기4"],  // 수식은 \\(...\\)
+//   correctIndex: 정답인 보기의 인덱스(0~3)
+//   explanation: "정답에 대한 간단표시(틀릴때 alert)"
+//
+// ※ 문제는 “처음보는 사람도 조건 파악이 가능하도록” 간단 설명 포함.
+//   단, 불필요한 힌트는 넣지 말라고 하셨으므로 최소한의 문제조건만 유지.
+//
+problems = [
+  // #18
+  {
+    question: 
+      "다음 삼차방정식 \\(x^3 + a x^2 - x - 3 = 0\\)에서 한 근이 \\(x=-1\\)일 때, 나머지 두 근을 구하시오. " +
+      "(단, \\(a\\)는 상수)",
+    choices: [
+      "\\(\\{-3,\\;1\\}\\)",
+      "\\(\\{3,\\;-1\\}\\)",
+      "\\(\\{1,\\;2\\}\\)",
+      "\\(\\{-3,\\;-1\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\{-3,\\;1\\}\\)"
+  },
+  // #19
+  {
+    question:
+      "다음 \\(x^3 -4x^2 + a x + 6 = 0\\)에서 한 근이 \\(x=2\\)일 때, 나머지 두 근을 구하시오.",
+    choices: [
+      "\\(\\{3,\\;-1\\}\\)",
+      "\\(\\{-3,\\;1\\}\\)",
+      "\\(\\{-2,\\;1\\}\\)",
+      "\\(\\{2,\\;-3\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\{3,\\;-1\\}\\)"
+  },
+  // #20
+  {
+    question:
+      "다음 \\(x^3 + a x^2 - x + 5 = 0\\)에서 한 근이 \\(x=1\\)일 때, 나머지 두 근을 구하시오.",
+    choices: [
+      "\\(\\{5,\\;-1\\}\\)",
+      "\\(\\{-5,\\;1\\}\\)",
+      "\\(\\{-1,\\;1\\}\\)",
+      "\\(\\{2,\\;-3\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\{5,\\;-1\\}\\)"
+  },
+  // #27
+  {
+    question:
+      "다음 삼차방정식 \\(x^3 + a x^2 -3x -1=0\\)에서 한 근이 \\(x=-1\\)일 때, 나머지 두 근을 구하시오.",
+    choices: [
+      "\\(\\{1+\\sqrt{2},\\;1-\\sqrt{2}\\}\\)",
+      "\\(\\{1,\\;-3\\}\\)",
+      "\\(\\{-1+\\sqrt{2},\\;-1-\\sqrt{2}\\}\\)",
+      "\\(\\{3,\\;-2\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\{1+\\sqrt{2},\\;1-\\sqrt{2}\\}\\)"
+  },
+  // #28
+  {
+    question:
+      "다음 \\(x^3 + (a+5)x^2 - a x -9 + 3a =0\\)에서 한 근이 \\(x=-1\\)일 때, 나머지 두 근을 구하시오.",
+    choices: [
+      "\\(\\{-6,\\;1\\}\\)",
+      "\\(\\{6,\\;-1\\}\\)",
+      "\\(\\{-3,\\;2\\}\\)",
+      "\\(\\{3,\\;-6\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\{-6,\\;1\\}\\)"
+  },
+  // #30
+  {
+    question:
+      "다음 방정식을 풀어라: \\((x^2 + 2x)^2 - (x^2 + 2x) - 6 = 0\\).",
+    choices: [
+      "실근 \\(x=1,\\;-3\\), 복소근 \\(x=-1\\pm i\\)",
+      "실근 \\(x=3,\\;-1\\), 복소근 \\(x=-2\\pm i\\)",
+      "실근 \\(x=1,\\;-2\\), 복소근 \\(x=1\\pm i\\)",
+      "실근 \\(x=2,\\;-3\\), 복소근 \\(x=-1\\pm i\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(1, -3\\), 허근=\\(-1 \\pm i\\)."
+  },
+  // #31
+  {
+    question:
+      "다음 방정식을 풀어라: \\((x^2 - x)^2 - 3(x^2 - x) + 2 = 0\\).",
+    choices: [
+      "\\(x=2,\\;-1,\\;\\dfrac{1\\pm \\sqrt{5}}{2}\\)",
+      "\\(x=1,\\;-2,\\;\\dfrac{1\\pm \\sqrt{5}}{2}\\)",
+      "\\(x=2,\\;-1,\\;\\dfrac{-1\\pm \\sqrt{5}}{2}\\)",
+      "\\(x=1,\\;2,\\;\\dfrac{1\\pm \\sqrt{5}}{2}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=2, -1, \\frac{1\\pm \\sqrt5}{2}\\)."
+  },
+  // #32
+  {
+    question:
+      "다음 방정식을 풀어라: \\((x^2 -5x +1)(x^2 -5x +3) -24=0\\).",
+    choices: [
+      "실근=\\(\\dfrac{5\\pm \\sqrt{37}}{2}\\), 허근2개",
+      "실근=\\(\\dfrac{5\\pm \\sqrt{21}}{2}\\), 허근2개",
+      "실근=\\(\\dfrac{5\\pm \\sqrt{37}}{2},\\;\\dfrac{5\\pm \\sqrt{3}}{2}\\)",
+      "실근=\\(\\dfrac{5\\pm \\sqrt{21}}{2}\\) 2개, \\(\\dfrac{5\\pm i\\sqrt{3}}{2}\\) 2개"
+    ],
+    correctIndex: 1,
+    explanation: "정답: \\(\\frac{5\\pm \\sqrt{21}}{2}\\) 실근2, 그외 허근2."
+  },
+  // #33
+  {
+    question:
+      "다음 방정식을 풀어라: \\((x^2 - x + 2)^2 - 3(x^2 - x) -34=0\\).",
+    choices: [
+      "실근=\\(\\dfrac{1\\pm\\sqrt{21}}{2}\\), 허근=\\(\\dfrac{1\\pm i\\sqrt{23}}{2}\\)",
+      "실근=\\(\\dfrac{3\\pm\\sqrt{21}}{2}\\), 허근=\\(\\dfrac{1\\pm i\\sqrt{23}}{2}\\)",
+      "실근=\\(\\dfrac{1\\pm\\sqrt{13}}{2}\\), 허근=\\(\\dfrac{1\\pm i\\sqrt{23}}{2}\\)",
+      "실근=\\(\\dfrac{1\\pm\\sqrt{21}}{2}\\), 허근=\\(\\dfrac{3\\pm i\\sqrt{23}}{2}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(\\frac{1\\pm \\sqrt{21}}{2}\\), 허근=\\(\\frac{1\\pm i\\sqrt{23}}{2}\\)."
+  },
+  // #36
+  {
+    question:
+      "다음 방정식을 풀어라: \\((x^2 - 4x)^2 -2(x^2 -4x) -15=0\\).",
+    choices: [
+      "\\(\\{5,\\;-1,\\;3,\\;1\\}\\)",
+      "\\(\\{3,\\;-5,\\;1,\\;-1\\}\\)",
+      "\\(\\{3,\\;1,\\;-2,\\;-1\\}\\)",
+      "\\(\\{5,\\;-1,\\;-3,\\;-1\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=5, -1, 3, 1\\)."
+  },
+  // #37
+  {
+    question:
+      "다음 방정식을 풀어라: \\((x^2 + 4x)^2 -2(x^2 + 4x +3) -2=0\\).",
+    choices: [
+      "\\(\\{-2\\pm 2\\sqrt{2},\\;-2\\pm\\sqrt{2}\\}\\)",
+      "\\(\\{-2\\pm\\sqrt{2},\\;-2\\pm i\\sqrt{2}\\}\\)",
+      "\\(\\{2\\pm\\sqrt{2},\\;-2\\pm \\sqrt{2}\\}\\)",
+      "\\(\\{-2\\pm 2,\\;-2\\pm \\sqrt{6}\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=-2\\pm 2\\sqrt2,\\;-2\\pm \\sqrt2\\)."
+  },
+  // #38
+  {
+    question:
+      "방정식 \\(x(x-1)(x+1)(x+2) -24=0\\)의 모든 해를 구하시오.",
+    choices: [
+      "실근=\\(\\{2,\\;-3\\}\\), 나머지 복소근2",
+      "실근=\\(\\{3,\\;-2\\}\\), 나머지 복소근2",
+      "실근=\\(\\{2,\\;-1\\}\\), 나머지 복소근2",
+      "실근 4개"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=2, -3, 나머지 2근은 복소근."
+  },
+  // #39
+  {
+    question:
+      "방정식 \\((x-1)(x-2)(x-3)(x-4)-3=0\\)의 모든 해를 구하시오.",
+    choices: [
+      "실근=\\(\\dfrac{5\\pm\\sqrt{13}}{2}\\), 허근2",
+      "실근=\\(\\dfrac{5\\pm\\sqrt{21}}{2}\\), 허근2",
+      "실근=\\(\\dfrac{5\\pm\\sqrt{13}}{2},\\; \\dfrac{5\\pm\\sqrt{3}}{2}\\)",
+      "실근=\\(\\dfrac{5\\pm\\sqrt{21}}{2}\\)만 2개"
+    ],
+    correctIndex: 1,
+    explanation: "정답: \\(\\frac{5\\pm\\sqrt{21}}{2}\\)이 실근, 그외 허근2."
+  },
+  // #40
+  {
+    question:
+      "방정식 \\((x+1)(x+3)(x+5)(x+7)+15=0\\)의 모든 해를 구하시오.",
+    choices: [
+      "\\(x=-6,\\;-2,\\;-4\\pm\\sqrt{6}\\)",
+      "\\(x=-6,\\;-2,\\;-4\\pm\\sqrt{2}\\)",
+      "\\(x=-5,\\;-3,\\;-4\\pm\\sqrt{6}\\)",
+      "\\(x=-5,\\;-3,\\;-4\\pm\\sqrt{2}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(-6,\\;-2,\\;-4\\pm\\sqrt{6}\\)."
+  },
+  // #41
+  {
+    question:
+      "다음 \\((x^2 -3x)^2 -2(x^2 -3x) -8=0\\)의 실근을 모두 구하시오.",
+    choices: [
+      "\\(\\{4,\\;-1,\\;2,\\;1\\}\\)",
+      "\\(\\{2,\\;3,\\;-1,\\;1\\}\\)",
+      "\\(\\{4,\\;3,\\;-1,\\;-2\\}\\)",
+      "\\(\\{4,\\;2,\\;1,\\;-1\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=4, -1, 2, 1\\)."
+  },
+  // #42
+  {
+    question:
+      "방정식 \\((x+1)(x-2)(x+3)(x+6)+14=0\\)의 모든 해를 구하시오.",
+    choices: [
+      "\\(\\{-2\\pm\\sqrt{2},\\;-2\\pm\\sqrt{15}\\}\\)",
+      "\\(\\{-2\\pm\\sqrt{2},\\;-2\\pm\\sqrt{2}\\}\\) (중복)",
+      "\\(\\{-2\\pm \\sqrt{2},\\;-2\\pm i\\sqrt{2}\\}\\)",
+      "\\(\\{-2\\pm \\sqrt{15},\\;-2\\pm \\sqrt{2}\\}\\)"
+    ],
+    correctIndex: 3,
+    explanation: "정답: \\(x=-2\\pm\\sqrt{15},\\;-2\\pm\\sqrt{2}\\)."
+  },
+  // #43
+  {
+    question:
+      "방정식 \\((x+1)(x+2)(x+3)(x+4)=8\\) 의 모든 해를 구하시오 (실근+복소근).",
+    choices: [
+      "\\(\\{\\tfrac{-5\\pm\\sqrt{17}}{2},\\;\\tfrac{-5\\pm i\\sqrt{7}}{2}\\}\\)",
+      "\\(\\{\\tfrac{-3\\pm\\sqrt{13}}{2},\\;\\tfrac{-3\\pm i\\sqrt{3}}{2}\\}\\)",
+      "\\(\\{-2\\pm\\sqrt{2},\\;-2\\pm i\\sqrt{3}\\}\\)",
+      "실근만 존재"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(\\frac{-5\\pm\\sqrt{17}}{2}\\), 허근=\\(\\frac{-5\\pm i\\sqrt7}{2}\\)."
+  },
+  // #44
+  {
+    question:
+      "방정식 \\(x(x+1)(x+2)(x+3)=3\\) 의 모든 해(실근+복소근)를 구하시오.",
+    choices: [
+      "\\(\\{\\tfrac{-3\\pm\\sqrt{13}}{2},\\;\\tfrac{-3\\pm i\\sqrt{3}}{2}\\}\\)",
+      "\\(\\{\\tfrac{-5\\pm\\sqrt{17}}{2},\\;\\tfrac{-5\\pm i\\sqrt{7}}{2}\\}\\)",
+      "\\(\\{1,\\;2,\\dots\\}\\)",
+      "\\(\\{0,\\;-1,\\;-2,\\;-3\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(\\frac{-3\\pm\\sqrt{13}}{2}\\), 허근=\\(\\frac{-3\\pm i\\sqrt3}{2}\\)."
+  },
+  // #45
+  {
+    question:
+      "\\(x^4 -5x^2 +6=0\\) 의 모든 해를 구하시오.",
+    choices: [
+      "\\(\\{\\pm\\sqrt{2},\\;\\pm\\sqrt{3}\\}\\)",
+      "\\(\\{\\pm\\sqrt{5},\\;\\pm1\\}\\)",
+      "\\(\\{\\pm\\sqrt{3},\\;\\pm2\\}\\)",
+      "\\(\\{\\pm\\sqrt{2},\\;\\pm3\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\pm\\sqrt{2},\\pm\\sqrt{3}\\)."
+  },
+  // #46
+  {
+    question:
+      "\\(x^4 +2x^2 +9=0\\) 의 모든 근(복소근)을 구하시오. " +
+      "힌트: \\((x^2+3)^2 - (2x)^2=0\\) 등으로 합차공식 가능.",
+    choices: [
+      "\\(x=\\pm(1 \\pm i\\sqrt{2})\\) (총 4개)",
+      "\\(x=\\pm i\\sqrt{2}\\) (이중근)",
+      "실근만 존재",
+      "해 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(1\\pm i\\sqrt2, -1\\pm i\\sqrt2\\)."
+  },
+  // #47
+  {
+    question:
+      "\\(x^4 -2x^2 +1=0\\) 의 모든 해를 구하시오.",
+    choices: [
+      "\\(\\{x=\\pm1\\}\\) (각각 중근)",
+      "\\(\\{x=\\pm1,\\;\\pm i\\}\\)",
+      "\\(\\{x=\\pm\\sqrt{2},\\;0\\}\\)",
+      "\\(\\{x=\\pm1\\}\\) (단순근)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=\\pm1\\), 각각 중근."
+  },
+  // #48
+  {
+    question:
+      "\\(x^4 +3x^2 +4=0\\) 의 모든 해(복소근)를 구하시오.",
+    choices: [
+      "\\(x^2=\\dfrac{-3\\pm i\\sqrt{7}}{2}\\) 에서 유도 (4개 복소근)",
+      "실근 \\(\\pm2\\)",
+      "실근 \\(\\pm\\sqrt{3}\\)",
+      "해 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근 없고 복소근 4개."
+  },
+  // #49
+  {
+    question:
+      "\\(x^4 -3x^2 +2=0\\) 의 모든 해를 구하시오.",
+    choices: [
+      "\\(\\{\\pm1,\\;\\pm\\sqrt{2}\\}\\)",
+      "\\(\\{\\pm\\sqrt{3},\\;\\pm i\\sqrt{2}\\}\\)",
+      "\\(\\{\\pm\\sqrt{2},\\;\\pm i\\}\\)",
+      "\\(\\{\\pm\\sqrt{1},\\;\\pm\\sqrt{2}\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\pm1,\\pm\\sqrt{2}\\)."
+  },
+  // #50
+  {
+    question:
+      "\\(x^4 -5x^2 +4=0\\) 의 모든 해를 구하시오.",
+    choices: [
+      "\\(\\{\\pm1,\\;\\pm2\\}\\)",
+      "\\(\\{\\pm2,\\;\\pm\\sqrt{5}\\}\\)",
+      "\\(\\{\\pm\\sqrt{4},\\;\\pm\\sqrt{1}\\}\\)",
+      "\\(\\{\\pm\\sqrt{2},\\;\\pm\\sqrt{3}\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\pm1,\\pm2\\)."
+  },
+  // #51
+  {
+    question:
+      "\\(x^4 +2x^2 -24=0\\) 의 실근을 모두 구하시오.",
+    choices: [
+      "\\(\\{\\pm2\\}\\)",
+      "\\(\\{\\pm4\\}\\)",
+      "\\(\\{\\pm\\sqrt{6}\\}\\)",
+      "실근 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=\\pm2\\)."
+  },
+  // #52
+  {
+    question:
+      "\\(x^4 -x^2 -6=0\\) 의 모든 해(실근+허근)를 구하시오.",
+    choices: [
+      "\\(\\{\\pm\\sqrt{3},\\;\\pm i\\sqrt{2}\\}\\)",
+      "\\(\\{\\pm\\sqrt{2},\\;\\pm i\\sqrt{3}\\}\\)",
+      "실근만 \\(\\pm\\sqrt{3}\\)",
+      "실근 없다"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(\\pm\\sqrt{3}\\), 허근=\\(\\pm i\\sqrt{2}\\)."
+  },
+  // #53
+  {
+    question:
+      "\\(x^4 -2x^2 -15=0\\) 의 모든 해를 구하시오.",
+    choices: [
+      "\\(\\{\\pm\\sqrt{5},\\;\\pm i\\sqrt{3}\\}\\)",
+      "\\(\\{\\pm\\sqrt{5},\\;\\pm\\sqrt{3}\\}\\)",
+      "\\(\\{\\pm\\sqrt{3},\\;\\pm\\sqrt{5}\\}\\)",
+      "\\(\\{\\pm\\sqrt{5},\\;\\pm\\sqrt{2}\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\pm\\sqrt{5},\\;\\pm i\\sqrt{3}\\)."
+  },
+  // #54
+  {
+    question:
+      "\\(x^4 -8x^2 -9=0\\) 의 모든 실근을 구하시오.",
+    choices: [
+      "\\(\\{\\pm3\\}\\)",
+      "\\(\\{\\pm3,\\;\\pm i\\}\\)",
+      "\\(\\{\\pm\\sqrt{8},\\;\\pm1\\}\\)",
+      "실근 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=\\pm3\\)."
+  },
+  // #57
+  {
+    question:
+      "\\(x^4 -3x^2 -4=0\\) 의 모든 실근을 구하시오.",
+    choices: [
+      "\\(\\{\\pm2\\}\\)",
+      "\\(\\{\\pm1,\\;\\pm2\\}\\)",
+      "\\(\\{\\pm2,\\;\\pm\\sqrt{3}\\}\\)",
+      "\\(\\{\\pm\\sqrt{4},\\;\\pm\\sqrt{3}\\}\\)"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(\\pm2\\)."
+  },
+  // #63
+  {
+    question:
+      "\\(x^4 -3x^3 -2x^2 -3x +1=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\{2\\pm\\sqrt{3},\\;-\\tfrac12 \\pm i\\tfrac{\\sqrt{3}}{2}\\}\\)",
+      "\\(\\{1,\\;2,\\dots\\}\\)",
+      "\\(\\{-1\\pm i,\\dots\\}\\)",
+      "해 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(2\\pm\\sqrt{3}\\), 허근=\\(-\\tfrac12\\pm i\\tfrac{\\sqrt3}{2}\\)."
+  },
+  // #64
+  {
+    question:
+      "\\(x^4 +5x^3 -4x^2 +5x +1=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\{-3\\pm 2\\sqrt2,\\;\\tfrac{1\\pm i\\sqrt3}{2}\\}\\)",
+      "\\(\\{-4\\pm \\sqrt{15},\\;\\tfrac{-3\\pm \\sqrt5}{2}\\}\\)",
+      "\\(\\{1,\\;-1,\\dots\\}\\)",
+      "해 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=-3\\pm 2\\sqrt2,\\; \\frac{1\\pm i\\sqrt3}{2}\\)."
+  },
+  // #65
+  {
+    question:
+      "\\(x^4 -3x^3 +4x^2 -3x +1=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\{1\\;\\text{(중근)},\\;\\tfrac{1\\pm i\\sqrt3}{2}\\}\\)",
+      "\\(\\{1,\\;2,\\dots\\}\\)",
+      "\\(\\{1,\\;-1,\\pm i\\}\\)",
+      "실근만 존재"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=1\\) (이중근), 허근=\\(\\frac{1\\pm i\\sqrt3}{2}\\)."
+  },
+  // #66
+  {
+    question:
+      "\\(x^4 +11x^3 +26x^2 +11x +1=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\{-4\\pm \\sqrt{15},\\;\\tfrac{-3\\pm \\sqrt5}{2}\\}\\)",
+      "\\(\\{-3\\pm 2\\sqrt2,\\;\\tfrac{1\\pm i\\sqrt3}{2}\\}\\)",
+      "\\(\\{1,\\;-1,\\dots\\}\\)",
+      "복소근만 4개"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=-4\\pm\\sqrt{15},\\; x=\\tfrac{-3\\pm \\sqrt5}{2}\\)."
+  },
+  // #67
+  {
+    question:
+      "\\(x^4 -7x^3 +12x^2 -7x +1=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\{1\\;\\text{(중근)},\\;\\tfrac{5\\pm \\sqrt{21}}{2}\\}\\)",
+      "\\(\\{-1,\\;2,\\dots\\}\\)",
+      "복소근만 존재",
+      "해 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=1\\) (이중근), \\(\\frac{5\\pm \\sqrt{21}}{2}\\)."
+  },
+  // #68
+  {
+    question:
+      "\\(2x^4 +5x^3 + x^2 +5x +2=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\bigl\\{\\tfrac{-3\\pm \\sqrt5}{2}\\}, \\text{(복소근2개)}\\bigr\\}",
+      "\\(\\{-4\\pm \\sqrt{15},\\;\\tfrac{-3\\pm \\sqrt5}{2}\\}\\)",
+      "해 없음",
+      "\\{1,\\;-2,\\dots\\}"
+    ],
+    correctIndex: 0,
+    explanation: "정답: 실근=\\(\\frac{-3\\pm\\sqrt5}{2}\\), 나머지2근=복소근."
+  },
+  // #69
+  {
+    question:
+      "\\(x^4 -x^3 -4x^2 -x +1=0\\) 의 모든 근을 구하시오.",
+    choices: [
+      "\\(\\{-1\\;\\text{(중근)},\\;\\tfrac{3\\pm \\sqrt5}{2}\\}\\)",
+      "\\(\\{-2,\\;-1,\\;1,\\;2\\}\\)",
+      "\\(\\{1\\;\\text{(중근)},\\;\\pm i\\sqrt{3}\\}\\)",
+      "해 없음"
+    ],
+    correctIndex: 0,
+    explanation: "정답: \\(x=-1\\) (중근), \\(\\frac{3\\pm \\sqrt5}{2}\\)."
+  }
+];
+
+// --------------------------------------------------------------------
+</script>
+</body>
+</html>
